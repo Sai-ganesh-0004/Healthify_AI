@@ -2,6 +2,8 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
 import os
+import subprocess
+import sys
 import joblib
 import traceback
 
@@ -68,17 +70,79 @@ weight_model = None
 obesity_model = None
 score_model = None
 
-if all(os.path.exists(path) for path in HEALTH_MODELS.values()):
+def _load_health_models_from_disk():
+    global weight_model, obesity_model, score_model, health_models_loaded
+
     try:
         weight_model = joblib.load(HEALTH_MODELS["weight"])
         obesity_model = joblib.load(HEALTH_MODELS["obesity"])
         score_model = joblib.load(HEALTH_MODELS["health_score"])
-        health_models_loaded = True
-        print("✅ Health Models (genai-ml) loaded successfully!")
+        return True
     except Exception as e:
         print(f"⚠️  Error loading health models: {e}")
-else:
-    print("⚠️  Health models not found. Please run: python -m genai_ml.train_model")
+        return False
+
+
+def _train_health_models():
+    print("🔄 Training health models...")
+    result = subprocess.run(
+        [sys.executable, "train_model.py"],
+        cwd=GENAI_ML_DIR,
+        capture_output=True,
+        text=True,
+    )
+    if result.stdout:
+        print(result.stdout)
+    if result.stderr:
+        print(result.stderr)
+    if result.returncode != 0:
+        raise RuntimeError(f"Health model training failed with code {result.returncode}")
+
+
+def _validate_health_models():
+    """Run a tiny smoke test to catch sklearn pickle compatibility issues early."""
+    sample_features = [[25, 1, 170.0, 70.0, 24.2, 7, 3, 0, 1, 0, 0]]
+    weight_model.predict(sample_features)[0]
+    obesity_model.predict(sample_features)[0]
+    score_model.predict(sample_features)[0]
+
+
+def load_health_models(force_retrain=False):
+    global health_models_loaded
+
+    if force_retrain:
+        _train_health_models()
+
+    if not all(os.path.exists(path) for path in HEALTH_MODELS.values()):
+        print("⚠️  Health models not found. Please run: python -m genai_ml.train_model")
+        health_models_loaded = False
+        return
+
+    if not _load_health_models_from_disk():
+        print("🔄 Attempting auto-retrain for health models...")
+        _train_health_models()
+        if not _load_health_models_from_disk():
+            health_models_loaded = False
+            return
+
+    try:
+        _validate_health_models()
+        health_models_loaded = True
+        print("✅ Health Models (genai-ml) loaded successfully!")
+    except Exception as validation_error:
+        print(f"⚠️  Health model validation failed: {validation_error}")
+        print("🔄 Attempting auto-retrain for health models...")
+        _train_health_models()
+        if not _load_health_models_from_disk():
+            health_models_loaded = False
+            return
+
+        _validate_health_models()
+        health_models_loaded = True
+        print("✅ Health Models retrained and loaded successfully!")
+
+
+load_health_models()
 
 @app.route("/", methods=["GET"])
 def home():
@@ -134,9 +198,20 @@ def predict_health():
         ]]
 
         # Get predictions
-        predicted_weight = weight_model.predict(features)[0]
-        obesity = obesity_model.predict(features)[0]
-        health_score = score_model.predict(features)[0]
+        try:
+            predicted_weight = weight_model.predict(features)[0]
+            obesity = obesity_model.predict(features)[0]
+            health_score = score_model.predict(features)[0]
+        except Exception as predict_error:
+            print(f"⚠️  Health prediction failed: {predict_error}")
+            if "monotonic_cst" in str(predict_error):
+                print("🔄 Rebuilding health models due to sklearn compatibility issue...")
+                load_health_models(force_retrain=True)
+                predicted_weight = weight_model.predict(features)[0]
+                obesity = obesity_model.predict(features)[0]
+                health_score = score_model.predict(features)[0]
+            else:
+                raise
 
         labels = {
             0: "Underweight",
@@ -179,14 +254,30 @@ def predict_disease():
 
         duration = data.get("duration", "")
 
-        result = predict(
-            symptoms=symptoms,
-            age=age,
-            gender=gender,
-            blood_pressure=blood_pressure,
-            cholesterol=cholesterol,
-            duration=duration,
-        )
+        try:
+            result = predict(
+                symptoms=symptoms,
+                age=age,
+                gender=gender,
+                blood_pressure=blood_pressure,
+                cholesterol=cholesterol,
+                duration=duration,
+            )
+        except Exception as predict_error:
+            print(f"⚠️  Disease prediction failed: {predict_error}")
+            if "monotonic_cst" in str(predict_error):
+                print("🔄 Rebuilding disease model due to sklearn compatibility issue...")
+                load_disease_predictor()
+                result = predict(
+                    symptoms=symptoms,
+                    age=age,
+                    gender=gender,
+                    blood_pressure=blood_pressure,
+                    cholesterol=cholesterol,
+                    duration=duration,
+                )
+            else:
+                raise
 
         print(f"✅ Prediction: {result['disease']} | Risk: {result['risk_level']} | Confidence: {result['confidence']}%")
         return jsonify(result)
