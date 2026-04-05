@@ -1,4 +1,4 @@
-const DietPlan = require("../models/DietPlan");
+const DietPlan = require("../models/Dietplan");
 
 const DEFAULT_DIET = [
   { meal_type: "Breakfast", name: "Oats & Berry Bowl", calories: 320, protein: "12g", carbs: "52g", fat: "8g", tags: ["High Fiber", "Low Sugar", "Antioxidant"] },
