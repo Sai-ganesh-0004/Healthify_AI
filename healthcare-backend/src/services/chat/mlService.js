@@ -1,75 +1,76 @@
-const { spawn } = require("child_process");
-const path = require("path");
+const axios = require("axios");
 
-const ML_DIR = path.join(__dirname, "..", "..", "..", "genai-ml");
-const PREDICT_SCRIPT = path.join(ML_DIR, "predict.py");
+// ML Service URL - can be configured via environment variable
+const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://localhost:5000";
 
-const getPythonCommand = () => process.env.GENAI_ML_PYTHON || "python";
-
-const getMLPredictions = (data) => {
-  return new Promise((resolve, reject) => {
-    const python = spawn(
-      getPythonCommand(),
-      [PREDICT_SCRIPT, JSON.stringify(data)],
+const getMLPredictions = async (data) => {
+  try {
+    const response = await axios.post(
+      `${ML_SERVICE_URL}/predict/health`,
+      data,
       {
-        cwd: ML_DIR,
+        timeout: 10000, // 10 second timeout
       },
     );
-
-    let result = "";
-    let error = "";
-
-    python.stdout.on("data", (chunk) => {
-      result += chunk.toString();
-    });
-
-    python.stderr.on("data", (chunk) => {
-      error += chunk.toString();
-    });
-
-    python.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(error || "Graph ML prediction failed"));
-        return;
-      }
-
-      try {
-        resolve(JSON.parse(result.trim()));
-      } catch (parseError) {
-        reject(new Error("Failed to parse graph ML output"));
-      }
-    });
-  });
+    return response.data;
+  } catch (error) {
+    const errorMsg =
+      error.response?.data?.error ||
+      error.message ||
+      "ML Service prediction failed";
+    throw new Error(errorMsg);
+  }
 };
 
-const generateProjections = (userProfile) => {
+const generateProjections = (userProfile, predictions = {}) => {
   const currentWeight = Number(userProfile.weight) || 70;
   const goal = userProfile.goal;
+  const predictedWeight = Number(predictions?.predicted_weight);
+  const obesityRisk = String(predictions?.obesity_risk || "");
   const heightMeters = (Number(userProfile.height) || 170) / 100;
 
-  let planChange = 0;
-  let noPlanChange = 0;
+  const fallbackTarget =
+    {
+      "lose weight": currentWeight - 4,
+      "gain weight": currentWeight + 3,
+      "gain muscle": currentWeight + 2.5,
+    }[goal] ?? currentWeight;
+
+  let withPlanTarget = Number.isFinite(predictedWeight)
+    ? predictedWeight
+    : fallbackTarget;
+
+  let withoutPlanTarget = currentWeight;
 
   if (goal === "lose weight") {
-    planChange = -0.5;
-    noPlanChange = 0.15;
+    withPlanTarget = Math.min(withPlanTarget, currentWeight - 0.5);
+    withoutPlanTarget =
+      currentWeight +
+      (obesityRisk === "Obese" || obesityRisk === "Overweight" ? 2.6 : 1.2);
   } else if (goal === "gain weight") {
-    planChange = 0.4;
-    noPlanChange = -0.1;
+    withPlanTarget = Math.max(withPlanTarget, currentWeight + 0.5);
+    withoutPlanTarget = currentWeight - 0.8;
   } else if (goal === "gain muscle") {
-    planChange = 0.35;
-    noPlanChange = -0.1;
+    withPlanTarget = Math.max(withPlanTarget, currentWeight + 0.4);
+    withoutPlanTarget = currentWeight - 0.6;
   } else {
-    planChange = 0;
-    noPlanChange = 0.2;
+    withoutPlanTarget =
+      currentWeight +
+      (obesityRisk === "Obese" || obesityRisk === "Overweight" ? 1.5 : 0.5);
   }
 
   const weightData = [];
   const obesityData = [];
 
   for (let index = 0; index <= 12; index += 1) {
-    const withPlanWeight = currentWeight + planChange * index;
-    const withoutPlanWeight = currentWeight + noPlanChange * index;
+    const progress = index / 12;
+    const withPlanProgress = Math.pow(progress, 0.9);
+    const withoutPlanProgress = Math.pow(progress, 1.15);
+
+    const withPlanWeight =
+      currentWeight + (withPlanTarget - currentWeight) * withPlanProgress;
+    const withoutPlanWeight =
+      currentWeight + (withoutPlanTarget - currentWeight) * withoutPlanProgress;
 
     weightData.push({
       week: `W${index}`,

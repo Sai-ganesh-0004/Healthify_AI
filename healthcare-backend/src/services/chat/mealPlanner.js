@@ -2,11 +2,7 @@ const { getRandomFoods } = require("./foodService");
 const { calculateDailyCalories } = require("./calorieService");
 
 const generateMealPlan = (userProfile) => {
-  const calories = calculateDailyCalories(
-    userProfile.weight,
-    userProfile.height,
-    userProfile.goal,
-  );
+  const calories = calculateDailyCalories(userProfile);
 
   return {
     calories,

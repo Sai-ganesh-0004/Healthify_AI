@@ -126,7 +126,7 @@ const getChatInsights = async (req, res) => {
       source = "fallback";
     }
 
-    const projections = generateProjections(normalizedProfile);
+    const projections = generateProjections(normalizedProfile, predictions);
 
     res.json({
       profile: normalizedProfile,

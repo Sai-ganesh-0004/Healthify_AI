@@ -43,6 +43,16 @@ const generateResponse = async ({
   const ai = getAiClient();
   const context = await buildHealthContext(userProfile, message);
 
+  const healthContextFacts = `
+Ground truth from app data (highest priority):
+- BMI: ${context.bmiData.bmi} (${context.bmiData.category})
+- Health Score: ${context.healthScore.score}/10
+- Daily calories target: ${context.mealPlan.calories}
+- Risk flags: ${JSON.stringify(context.risk.risks)}
+- Symptom hints: ${JSON.stringify(context.symptom.symptoms)}
+- Weight trend (approx): ${JSON.stringify(context.weightTrend)}
+`;
+
   let prompt = "";
 
   if (isFirstMessage) {
@@ -52,6 +62,8 @@ You are HealthAI Companion, a friendly, concise healthcare and fitness assistant
 User: ${userProfile.age} years old, ${userProfile.height}cm, ${userProfile.weight}kg
 Goal: ${userProfile.goal} | BMI: ${context.bmiData.bmi} (${context.bmiData.category})
 Diet: ${dietLabel(userProfile.diet)}
+
+${healthContextFacts}
 
 Context data (use selectively, do not dump everything):
 - Calories: ${context.mealPlan.calories}/day
@@ -71,6 +83,9 @@ RULES:
 - In Meal Plan, list specific Breakfast, Lunch, and Dinner options with simple portions when relevant
 - Use bold for key numbers
 - No walls of text
+- Prioritize and trust app data above generic health advice
+- Do not invent user metrics, reports, labs, or symptoms that are not provided
+- If data is missing/uncertain, say it clearly in one short line and continue with safest guidance
 - Mention that serious symptoms still require a real doctor
 - IMPORTANT: This app is for Indian users. For non-veg items, only suggest eggs, chicken, and fish.
 - If diet is Vegetarian only, do not include meat, eggs, or fish.
@@ -81,6 +96,7 @@ You are HealthAI Companion, a concise healthcare assistant.
 
 User: ${userProfile.age}y, ${userProfile.height}cm, ${userProfile.weight}kg, Goal: ${userProfile.goal}
 Diet: ${dietLabel(userProfile.diet)}
+${healthContextFacts}
 Recent conversation:
 ${formatHistory(history) || "No previous context."}
 
@@ -91,6 +107,8 @@ RULES:
 - Keep it under 180 words
 - Use Markdown formatting with short bullets when helpful
 - Be direct and actionable
+- Use app data first; only then add generic guidance
+- Do not fabricate data; if unsure, state uncertainty clearly
 - Mention when a doctor should be consulted for serious symptoms
 - For Indian users, non-veg items are limited to eggs, chicken, and fish only
 - If diet is Vegetarian only, do not include meat, eggs, or fish
