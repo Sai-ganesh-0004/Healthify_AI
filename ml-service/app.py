@@ -3,7 +3,7 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 import os
 import joblib
-import json
+import traceback
 
 load_dotenv()
 
@@ -13,11 +13,45 @@ CORS(app)
 # Check if disease model exists
 MODEL_PATH  = os.path.join(os.path.dirname(__file__), "models", "disease_model.pkl")
 model_loaded = False
+disease_load_error = None
+predict = None
+
+
+def load_disease_predictor():
+    """
+    Load disease predictor. If model files are incompatible with current sklearn,
+    retrain once on startup and load again.
+    """
+    global model_loaded, disease_load_error, predict
+
+    try:
+        from src.predict import predict as disease_predict
+        predict = disease_predict
+        model_loaded = True
+        disease_load_error = None
+        print("✅ Disease ML Model loaded successfully!")
+        return
+    except Exception as first_error:
+        print(f"⚠️  Disease model load failed: {first_error}")
+        print("🔄 Attempting auto-retrain for disease model...")
+
+    try:
+        from src.train_model import train as train_disease_model
+        train_disease_model()
+
+        from src.predict import predict as disease_predict
+        predict = disease_predict
+        model_loaded = True
+        disease_load_error = None
+        print("✅ Disease model retrained and loaded successfully!")
+    except Exception as retrain_error:
+        model_loaded = False
+        disease_load_error = str(retrain_error)
+        print(f"❌ Disease model unavailable after retrain attempt: {retrain_error}")
+        traceback.print_exc()
 
 if os.path.exists(MODEL_PATH):
-    from src.predict import predict
-    model_loaded = True
-    print("✅ Disease ML Model loaded successfully!")
+    load_disease_predictor()
 else:
     print("⚠️  Disease model not found. Please run: python src/train_model.py")
 
@@ -51,6 +85,7 @@ def home():
     return jsonify({
         "message":      "HealthAI ML Service Running ✅",
         "model_loaded": model_loaded,
+        "disease_load_error": disease_load_error,
     })
 
 @app.route("/health", methods=["GET"])
@@ -58,7 +93,8 @@ def health():
     return jsonify({ 
         "status": "running", 
         "disease_model_loaded": model_loaded,
-        "health_models_loaded": health_models_loaded
+        "health_models_loaded": health_models_loaded,
+        "disease_load_error": disease_load_error,
     })
 
 @app.route("/predict/health", methods=["POST"])
