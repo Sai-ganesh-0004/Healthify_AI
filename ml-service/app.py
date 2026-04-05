@@ -2,22 +2,49 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
 import os
+import joblib
+import json
 
 load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
 
-# Check if model exists
+# Check if disease model exists
 MODEL_PATH  = os.path.join(os.path.dirname(__file__), "models", "disease_model.pkl")
 model_loaded = False
 
 if os.path.exists(MODEL_PATH):
     from src.predict import predict
     model_loaded = True
-    print("✅ ML Model loaded successfully!")
+    print("✅ Disease ML Model loaded successfully!")
 else:
-    print("⚠️  Model not found. Please run: python src/train_model.py")
+    print("⚠️  Disease model not found. Please run: python src/train_model.py")
+
+# Check if health models exist (genai-ml models)
+GENAI_ML_DIR = os.path.join(os.path.dirname(__file__), "genai-ml")
+HEALTH_MODELS = {
+    "weight": os.path.join(GENAI_ML_DIR, "weight_model.pkl"),
+    "obesity": os.path.join(GENAI_ML_DIR, "obesity_model.pkl"),
+    "health_score": os.path.join(GENAI_ML_DIR, "health_score_model.pkl"),
+}
+
+health_models_loaded = False
+weight_model = None
+obesity_model = None
+score_model = None
+
+if all(os.path.exists(path) for path in HEALTH_MODELS.values()):
+    try:
+        weight_model = joblib.load(HEALTH_MODELS["weight"])
+        obesity_model = joblib.load(HEALTH_MODELS["obesity"])
+        score_model = joblib.load(HEALTH_MODELS["health_score"])
+        health_models_loaded = True
+        print("✅ Health Models (genai-ml) loaded successfully!")
+    except Exception as e:
+        print(f"⚠️  Error loading health models: {e}")
+else:
+    print("⚠️  Health models not found. Please run: python -m genai_ml.train_model")
 
 @app.route("/", methods=["GET"])
 def home():
@@ -28,7 +55,72 @@ def home():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({ "status": "running", "model_loaded": model_loaded })
+    return jsonify({ 
+        "status": "running", 
+        "disease_model_loaded": model_loaded,
+        "health_models_loaded": health_models_loaded
+    })
+
+@app.route("/predict/health", methods=["POST"])
+def predict_health():
+    """
+    Predict health metrics: weight, obesity risk, and health score
+    Replaces the old genai-ml subprocess approach
+    """
+    try:
+        if not health_models_loaded:
+            return jsonify({ 
+                "error": "Health models not loaded. Ensure genai-ml models exist in ml-service/genai-ml/" 
+            }), 503
+
+        data = request.get_json()
+        if not data:
+            return jsonify({ "error": "No data provided" }), 400
+
+        height_cm = float(data.get("height", 0) or 0)
+        weight_kg = float(data.get("weight", 0) or 0)
+        height_m = height_cm / 100 if height_cm > 0 else 0
+        bmi = (weight_kg / (height_m * height_m)) if height_m > 0 else 0
+
+        # Extract features
+        features = [[
+            data.get("age", 0),
+            data.get("gender", 0),
+            height_cm,
+            weight_kg,
+            bmi,
+            data.get("sleep", 0),
+            data.get("exercise", 0),
+            data.get("smoker", 0),
+            data.get("alcohol", 0),
+            data.get("diabetic", 0),
+            data.get("heart_disease", 0)
+        ]]
+
+        # Get predictions
+        predicted_weight = weight_model.predict(features)[0]
+        obesity = obesity_model.predict(features)[0]
+        health_score = score_model.predict(features)[0]
+
+        labels = {
+            0: "Underweight",
+            1: "Normal",
+            2: "Overweight",
+            3: "Obese"
+        }
+
+        result = {
+            "predicted_weight": round(predicted_weight, 2),
+            "obesity_risk": labels[int(obesity)],
+            "health_score": round(health_score, 2)
+        }
+
+        print(f"✅ Health Prediction: Weight={predicted_weight:.2f}, Obesity={labels[int(obesity)]}, Score={health_score:.2f}")
+        return jsonify(result)
+
+    except Exception as e:
+        print(f"❌ Error in health prediction: {str(e)}")
+        return jsonify({ "error": str(e) }), 500
 
 @app.route("/predict", methods=["POST"])
 def predict_disease():
