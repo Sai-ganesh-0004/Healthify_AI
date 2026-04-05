@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 import os
 import subprocess
 import sys
+import importlib
 import joblib
 import traceback
 
@@ -19,16 +20,37 @@ disease_load_error = None
 predict = None
 
 
-def load_disease_predictor():
+def _train_disease_model():
+    from src.train_model import train as train_disease_model
+    train_disease_model()
+
+
+def _reload_disease_predictor_module():
+    disease_module = importlib.import_module("src.predict")
+    return importlib.reload(disease_module)
+
+
+def load_disease_predictor(force_retrain=False):
     """
     Load disease predictor. If model files are incompatible with current sklearn,
     retrain once on startup and load again.
     """
     global model_loaded, disease_load_error, predict
 
+    if force_retrain:
+        try:
+            print("🔄 Forced retrain requested for disease model...")
+            _train_disease_model()
+        except Exception as retrain_error:
+            model_loaded = False
+            disease_load_error = str(retrain_error)
+            print(f"❌ Disease model forced retrain failed: {retrain_error}")
+            traceback.print_exc()
+            return
+
     try:
-        from src.predict import predict as disease_predict
-        predict = disease_predict
+        disease_module = _reload_disease_predictor_module()
+        predict = disease_module.predict
         model_loaded = True
         disease_load_error = None
         print("✅ Disease ML Model loaded successfully!")
@@ -38,11 +60,9 @@ def load_disease_predictor():
         print("🔄 Attempting auto-retrain for disease model...")
 
     try:
-        from src.train_model import train as train_disease_model
-        train_disease_model()
-
-        from src.predict import predict as disease_predict
-        predict = disease_predict
+        _train_disease_model()
+        disease_module = _reload_disease_predictor_module()
+        predict = disease_module.predict
         model_loaded = True
         disease_load_error = None
         print("✅ Disease model retrained and loaded successfully!")
@@ -267,7 +287,7 @@ def predict_disease():
             print(f"⚠️  Disease prediction failed: {predict_error}")
             if "monotonic_cst" in str(predict_error):
                 print("🔄 Rebuilding disease model due to sklearn compatibility issue...")
-                load_disease_predictor()
+                load_disease_predictor(force_retrain=True)
                 result = predict(
                     symptoms=symptoms,
                     age=age,
