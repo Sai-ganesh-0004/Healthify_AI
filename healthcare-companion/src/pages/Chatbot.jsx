@@ -160,8 +160,20 @@ export default function Chatbot({ user }) {
     setInsightsLoadingId(sessionId);
 
     try {
+      // Always use the latest persisted profile to avoid stale graph data.
+      let profileForInsights = profile;
+      try {
+        const latest = await getUserProfile();
+        const normalizedLatest = normalizeProfile({
+          ...profile,
+          ...latest?.user,
+        });
+        profileForInsights = normalizedLatest;
+        setProfile(normalizedLatest);
+      } catch {}
+
       const data = await getChatInsights({
-        userProfile: profile,
+        userProfile: profileForInsights,
         message: messageText,
       });
       updateSession(sessionId, { insights: data });
@@ -202,9 +214,8 @@ export default function Chatbot({ user }) {
         isFirstMessage: firstUserMessage,
       });
 
-      if (firstUserMessage) {
-        fetchInsights(activeId, userText);
-      }
+      // Refresh insights for each message so charts track latest profile state.
+      fetchInsights(activeId, userText);
 
       const response = await responsePromise;
       const aiMsg = { id: Date.now() + 1, role: "ai", text: response.message };
